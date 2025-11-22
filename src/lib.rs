@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 mod child;
 mod command;
 mod id_range;

@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
