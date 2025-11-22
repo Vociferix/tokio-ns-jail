@@ -2,9 +2,12 @@ use nix::unistd::{Gid, Uid};
 use std::cmp::Ordering;
 use std::ops::{Bound, RangeBounds};
 
+/// Trait representing a Linux ID, such as a UID or GID
 pub trait Id: Copy + Eq {
+    /// Construct an ID type from a raw value
     fn from_raw(raw: u32) -> Self;
 
+    /// Get the raw ID value
     fn as_raw(self) -> u32;
 }
 
@@ -14,13 +17,26 @@ pub(super) struct IdRangeInner<T: Id> {
     pub(super) end: T,
 }
 
+/// A range of Linux IDs, such as UIDs or GIDs
+///
+/// This range represents zero or more contiguous IDs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IdRange<T: Id> {
     pub(super) range: Option<IdRangeInner<T>>,
 }
 
+/// A range of Linux UIDs.
+///
+/// A pair of [`UidRange`]s can be passed to
+/// [`Command::map_uids`](super::Command::map_uids) to create a mapping
+/// of jail UIDs to host UIDs.
 pub type UidRange = IdRange<Uid>;
 
+/// A range of Linux GIDs.
+///
+/// A pair of [`GidRange`]s can be passed to
+/// [`Command::map_gids`](super::Command::map_gids) to create a mapping
+/// of jail GIDs to host GIDs.
 pub type GidRange = IdRange<Gid>;
 
 mod inner {
@@ -70,18 +86,22 @@ impl<T: Id> Default for IdRange<T> {
 }
 
 impl<T: Id> IdRange<T> {
+    /// Returns a range containing zero IDs
     pub fn empty() -> Self {
         Self { range: None }
     }
 
+    /// Returns a range over the IDs between `start` and `end`, inclusive
     pub fn new(start: T, end: T) -> Self {
         Self::from(start..=end)
     }
 
+    /// Returns `true` if the range contains zero IDs
     pub fn is_empty(self) -> bool {
         self.range.is_none()
     }
 
+    /// Returns the number of IDs included in the range
     pub fn len(self) -> usize {
         match self.range {
             None => 0,
@@ -89,19 +109,23 @@ impl<T: Id> IdRange<T> {
         }
     }
 
+    /// Returns the first ID in the range if the range is not empty
     pub fn start(self) -> Option<T> {
         self.range.map(|range| range.start)
     }
 
+    /// Returns the last ID in the range if the range is not empty
     pub fn end(self) -> Option<T> {
         self.range.map(|range| range.end)
     }
 
+    /// Returns an iterator over all the IDs in the range
     pub fn iter(self) -> Iter<T> {
         self.into_iter()
     }
 }
 
+/// An iterator over a contiguous sequence of Linux IDs
 #[derive(Debug)]
 pub struct Iter<T: Id> {
     curr: u32,

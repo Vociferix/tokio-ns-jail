@@ -13,6 +13,15 @@ use std::path::{Component, Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::pipe::{Receiver, Sender};
 
+/// Builder for constructing a jailed process.
+///
+/// [`Command`] is modeled after [`std::process::Command`]. However, it
+/// provides additional options specific to Linux namespace jailing.
+///
+/// A jailed process runs in an isolated environment, typically for the
+/// purpose of protecting the host environment from effects of the
+/// process to be jailed. It is also useful for running a command in
+/// an easily reproduceable environment across distinct systems.
 #[derive(Debug)]
 pub struct Command {
     rootfs: Option<PathBuf>,
@@ -32,6 +41,19 @@ pub struct Command {
 }
 
 bitflags::bitflags! {
+    /// Bit flags representing Linux namespaces.
+    ///
+    /// The namespaces represented here can be passed to a [`Command`] to
+    /// unshare those namespaces in the jail, where unsharing means that
+    /// the system information and resources associated with the namespace
+    /// will be separate and isolated from the corresponding resources on
+    /// the host system.
+    ///
+    /// Note that the mount and user namespaces are not represented by
+    /// [`Namespace`]. These namespaces unshared conditionally by
+    /// [`Command`] because they are required for the jail to operate. As
+    /// such, they are not included in [`Namespace`], since they would
+    /// serve no purpose.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct Namespace: std::ffi::c_int {
         const CGROUP = CloneFlags::CLONE_NEWCGROUP.bits();
@@ -59,6 +81,9 @@ struct Mount {
 }
 
 impl Command {
+    /// Creates a new [`Command`] that will run `program` in the jail.
+    ///
+    /// `program` must correspond to an executable inside the jail.
     pub fn new(program: impl AsRef<OsStr>) -> Self {
         Self {
             rootfs: None,
@@ -77,16 +102,29 @@ impl Command {
         }
     }
 
+    /// Sets the root filesystem for the jail.
+    ///
+    /// `path` must be a host system path to a directory. If not provided,
+    /// the current working directory will be used.
     pub fn rootfs(&mut self, path: impl AsRef<Path>) -> &mut Self {
         self.rootfs = Some(path.as_ref().into());
         self
     }
 
+    /// Sets whether the root filesystem is writable.
+    ///
+    /// By default, the root filesystem is mounted in read-only mode.
     pub fn writable_rootfs(&mut self, writable: bool) -> &mut Self {
         self.ro_root = !writable;
         self
     }
 
+    /// Specifies a file or directory to be bind mounted in the jail.
+    ///
+    /// `host_path` must be a path to a file or directory on the host system.
+    /// `jail_path` will be create inside the jail if it doesn't already
+    /// exist. `writable` specifies whether the mounted file or directory
+    /// will be writable from within the jail.
     pub fn bind_mount(
         &mut self,
         host_path: impl AsRef<Path>,
@@ -101,6 +139,33 @@ impl Command {
         self
     }
 
+    /// Specifies a path within the jail to mount a pseudo-devfs filesystem.
+    ///
+    /// Note that the mounted devfs filesystem will not be a true `devfs` or
+    /// `devtmpfs`. Instead, a mock devfs filesystem will be created including
+    /// commonly needed utilities such as `/dev/null` and `/dev/urandom`.
+    ///
+    /// Full listing of the contents of the pseudo-devfs filesystem:
+    /// * `null`
+    /// * `full`
+    /// * `zero`
+    /// * `random`
+    /// * `urandom`
+    /// * `tty`
+    /// * `stdin`
+    /// * `stdout`
+    /// * `stderr`
+    /// * `fd`
+    /// * `core`
+    /// * `shm`
+    /// * `pts`
+    /// * `ptmx`
+    /// * `console`*
+    ///
+    /// *`console` is only included if stdio is a TTY.
+    ///
+    /// Some resources in the pseudo-devfs may require a procfs mount to
+    /// function properly.
     pub fn devfs_mount(&mut self, jail_path: impl AsRef<Path>) -> &mut Self {
         self.mounts.push(Mount {
             src: MountSrc::DevFs,
@@ -110,6 +175,7 @@ impl Command {
         self
     }
 
+    /// Specifies a path within the jail to mount a procfs filesystem.
     pub fn procfs_mount(&mut self, jail_path: impl AsRef<Path>) -> &mut Self {
         self.mounts.push(Mount {
             src: MountSrc::ProcFs,
@@ -119,6 +185,7 @@ impl Command {
         self
     }
 
+    /// Specifies a path within the jail to mount a sysfs filesystem.
     pub fn sysfs_mount(&mut self, jail_path: impl AsRef<Path>) -> &mut Self {
         self.mounts.push(Mount {
             src: MountSrc::SysFs,
@@ -128,6 +195,7 @@ impl Command {
         self
     }
 
+    /// Specifies a path within the jail to mount a tmpfs filesystem.
     pub fn tmpfs_mount(&mut self, jail_path: impl AsRef<Path>) -> &mut Self {
         self.mounts.push(Mount {
             src: MountSrc::TmpFs,
@@ -137,6 +205,19 @@ impl Command {
         self
     }
 
+    /// Maps a range of jail UIDs to a range of host UIDs.
+    ///
+    /// Typically, it is desired to map the caller's UID to UID 0 (root),
+    /// which allows the process operate as if it were running as root
+    /// within the jail. However, any UID can be mapped to any other UID
+    /// as desired.
+    ///
+    /// The `host_uids` range must be the same size as the `jail_uids`
+    /// range.
+    ///
+    /// Multiple range pairs can be specified by calling this function
+    /// multiple times, but it is required for no single host or jail
+    /// UID to be specified more than once.
     pub fn map_uids(
         &mut self,
         host_uids: impl Into<UidRange>,
@@ -150,6 +231,17 @@ impl Command {
         self
     }
 
+    /// Maps a range of jail GIDs to a range of host GIDs.
+    ///
+    /// Typically, it is desired to map the caller's GID to GID 0 (root).
+    /// However, any GID can be mapped to any other GID as desired.
+    ///
+    /// The `host_gids` range must be the same size as the `jail_gids`
+    /// range.
+    ///
+    /// Multiple range pairs can be specified by calling this function
+    /// multiple times, but it is required for no single host or jail
+    /// GID to be specified more than once.
     pub fn map_gids(
         &mut self,
         host_gids: impl Into<GidRange>,
@@ -163,22 +255,32 @@ impl Command {
         self
     }
 
-    pub fn unshare(&mut self, namespaces: Namespace) -> &mut Self {
-        self.unshare = namespaces;
-        self
-    }
-
+    /// Maps the current host UID and GID to 0 (root) in the jail.
+    ///
+    /// This function is a convenience wrapper around
+    /// [`map_uids`](Self::map_uids) and [`map_gids`](Self::map_gids)
+    /// to map the current effective UID and GID to 0.
     pub fn user_as_root(&mut self) -> &mut Self {
         self.map_uids(Uid::effective(), 0u32);
         self.map_gids(Gid::effective(), 0u32);
         self
     }
 
+    /// Unshares a set of namespaces in the jail.
+    ///
+    /// See [`Namespace`] for the effect of unsharing each namespace.
+    pub fn unshare(&mut self, namespaces: Namespace) -> &mut Self {
+        self.unshare = namespaces;
+        self
+    }
+
+    /// Appends an argument to be passed to the program executed in the jail
     pub fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
         self.args.push(arg.as_ref().into());
         self
     }
 
+    /// Appends multiple arguments to be passed to the program executed in the jail
     pub fn args<I>(&mut self, args: I) -> &mut Self
     where
         I: IntoIterator,
@@ -189,11 +291,21 @@ impl Command {
         self
     }
 
+    /// Defines an environment variable to be set in the jail.
+    ///
+    /// Unlike [`std::process::Command`], the host environment is not captured
+    /// automatically, to ensure host information is not unintentionally leaked
+    /// into the jail.
     pub fn env(&mut self, key: impl AsRef<OsStr>, val: impl AsRef<OsStr>) -> &mut Self {
         self.env.insert(key.as_ref().into(), val.as_ref().into());
         self
     }
 
+    /// Defines multiple environment variables to be set in the jail.
+    ///
+    /// Unlike [`std::process::Command`], the host environment is not captured
+    /// automatically, to ensure host information is not unintentionally leaked
+    /// into the jail.
     pub fn envs<I, K, V>(&mut self, vars: I) -> &mut Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -207,45 +319,74 @@ impl Command {
         self
     }
 
-    pub fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
-        self.env.remove(key.as_ref());
-        self
-    }
-
-    pub fn env_clear(&mut self) -> &mut Self {
-        self.env.clear();
-        self
-    }
-
+    /// Specifies a directory within the jail to execute the program from.
+    ///
+    /// `path` must be an existing path within the jail. It will be the
+    /// current working directory when the jailed process starts.
     pub fn current_dir(&mut self, path: impl AsRef<Path>) -> &mut Self {
         self.curr_dir = Some(path.as_ref().into());
         self
     }
 
+    /// Specifies the redirection of `stdin` for the jailed process.
+    ///
+    /// `stdin` can be redirected to an I/O object, piped, inherited
+    /// from the host process, or redirected to `/dev/null`. If not set,
+    /// `stdin` is inherited if [`spawn`](Self::spawn) or
+    /// [`status`](Self::status) is called, and is piped if
+    /// [`output`](Self::output) is called.
+    ///
+    /// See [`Stdio`] for more details.
     pub fn stdin(&mut self, cfg: impl Into<Option<Stdio>>) -> &mut Self {
         self.stdin = cfg.into();
         self
     }
 
+    /// Specifies the redirection of `stdout` for the jailed process.
+    ///
+    /// `stdout` can be redirected to an I/O object, piped, inherited
+    /// from the host process, or redirected to `/dev/null`. If not set,
+    /// `stdout` is inherited if [`spawn`](Self::spawn) or
+    /// [`status`](Self::status) is called, and is piped if
+    /// [`output`](Self::output) is called.
+    ///
+    /// See [`Stdio`] for more details.
     pub fn stdout(&mut self, cfg: impl Into<Option<Stdio>>) -> &mut Self {
         self.stdout = cfg.into();
         self
     }
 
+    /// Specifies the redirection of `stderr` for the jailed process.
+    ///
+    /// `stderr` can be redirected to an I/O object, piped, inherited
+    /// from the host process, or redirected to `/dev/null`. If not set,
+    /// `stderr` is inherited if [`spawn`](Self::spawn) or
+    /// [`status`](Self::status) is called, and is piped if
+    /// [`output`](Self::output) is called.
+    ///
+    /// See [`Stdio`] for more details.
     pub fn stderr(&mut self, cfg: impl Into<Option<Stdio>>) -> &mut Self {
         self.stderr = cfg.into();
         self
     }
 
+    /// Overrides the first argument as seen by the program.
     pub fn arg0(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
         self.args[0] = arg.as_ref().into();
         self
     }
 
+    /// Starts the jailed process and returns a handle to it.
+    ///
+    /// The returned future completes immediately after the jailed process
+    /// is started and does not wait for it to terminate.
     pub async fn spawn(&mut self) -> Result<Child> {
         self.spawn_impl(Stdio::inherit()).await
     }
 
+    /// Runs the jailed process and returns the [`ExitStatus`] and stdio output.
+    ///
+    /// The returned future does not complete until the jailed process terminates.
     pub async fn output(&mut self) -> Result<Output> {
         self.spawn_impl(Stdio::piped())
             .await?
@@ -253,6 +394,9 @@ impl Command {
             .await
     }
 
+    /// Runs the jailed process and returns the [`ExitStatus`].
+    ///
+    /// The returned future does not complete until the jailed process terminates.
     pub async fn status(&mut self) -> Result<ExitStatus> {
         self.spawn_impl(Stdio::inherit()).await?.wait().await
     }
@@ -367,7 +511,7 @@ impl Command {
             pipe,
             buf: [0u8; 5],
             len: 0,
-            status: super::child::Status::StillAlive,
+            status: super::child::Status::Running,
         })
     }
 

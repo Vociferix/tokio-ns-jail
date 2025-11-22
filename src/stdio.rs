@@ -6,6 +6,13 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::unix::pipe::{Receiver, Sender};
 
+/// An object repsenting the redirection of stdio for a jailed process.
+///
+/// An instance of [`Stdio`] can be passed to
+/// [`Command::stdin`](super::Command::stdin),
+/// [`Command::stdout`](super::Command::stdout),
+/// or [`Command::stderr`](super::Command::stderr) in order to redirect
+/// the corresponding stdio stream.
 #[derive(Debug)]
 pub struct Stdio {
     pub(super) inner: StdioInner,
@@ -22,6 +29,7 @@ pub(super) enum StdioInner {
 }
 
 pin_project! {
+    /// A writable pipe to a jailed process's `stdin`
     #[derive(Debug)]
     pub struct ChildStdin {
         #[pin]
@@ -30,6 +38,7 @@ pin_project! {
 }
 
 pin_project! {
+    /// A readable pipe from a jailed process's `stdout`
     #[derive(Debug)]
     pub struct ChildStdout {
         #[pin]
@@ -38,6 +47,7 @@ pin_project! {
 }
 
 pin_project! {
+    /// A readable pipe from a jailed process's `stderr`
     #[derive(Debug)]
     pub struct ChildStderr {
         #[pin]
@@ -46,18 +56,30 @@ pin_project! {
 }
 
 impl Stdio {
+    /// Constructs a [`Stdio`] that will cause a jailed process to inherit stdio from the parent.
+    ///
+    /// In this case, stdio will not be redirected at all and the jailed process will share
+    /// `stdin`, `stdout`, or `stderr`, respectively, with the parent process.
     pub fn inherit() -> Self {
         Self {
             inner: StdioInner::Inherit,
         }
     }
 
+    /// Constructs a [`Stdio`] that will cause a jailed process redirect stdio to a pipe.
+    ///
+    /// In this case, stdio of the jailed process will become available to the caller via an
+    /// [`ChildStdin`], [`ChildStdout`], or [`ChildStderr`] instance.
     pub fn piped() -> Self {
         Self {
             inner: StdioInner::Pipe,
         }
     }
 
+    /// Constructs a [`Stdio`] that will cause a jailed process to drop stdio input or output.
+    ///
+    /// In this case, stdio of the jailed process will become no-ops. The stream is effectively
+    /// redirected to `/dev/null`.
     pub fn null() -> Self {
         Self {
             inner: StdioInner::Null,
