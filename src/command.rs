@@ -470,8 +470,7 @@ impl Command {
             .transpose()?
             .map(|stderr| stderr.into_raw_fd());
 
-        let mut stack: Vec<u8> = Vec::new();
-        stack.resize(STACK_SIZE, 0);
+        let mut stack: Vec<u8> = vec![0; STACK_SIZE];
 
         let flags = unsafe { CloneFlags::from_bits(self.unshare.bits()).unwrap_unchecked() };
 
@@ -608,7 +607,7 @@ impl Command {
                         }
                         if let Some(err) = err.into_inner() {
                             let msg = err.to_string();
-                            let _ = pipe.write_all(&msg.as_bytes());
+                            let _ = pipe.write_all(msg.as_bytes());
                         }
                         return 1;
                     }
@@ -635,7 +634,7 @@ impl Command {
                         }
                         if let Some(err) = err.into_inner() {
                             let msg = err.to_string();
-                            let _ = pipe.write_all(&msg.as_bytes());
+                            let _ = pipe.write_all(msg.as_bytes());
                         }
                         return 1;
                     }
@@ -662,7 +661,7 @@ impl Command {
                         }
                         if let Some(err) = err.into_inner() {
                             let msg = err.to_string();
-                            let _ = pipe.write_all(&msg.as_bytes());
+                            let _ = pipe.write_all(msg.as_bytes());
                         }
                         return 1;
                     }
@@ -685,13 +684,13 @@ impl Command {
                 }
                 if let Some(err) = err.into_inner() {
                     let msg = err.to_string();
-                    let _ = pipe.write_all(&msg.as_bytes());
+                    let _ = pipe.write_all(msg.as_bytes());
                 }
                 return 1;
             }
         };
 
-        if let Err(_) = pipe.write_all(&[0u8; 4]) {
+        if pipe.write_all(&[0u8; 4]).is_err() {
             return 1;
         }
 
