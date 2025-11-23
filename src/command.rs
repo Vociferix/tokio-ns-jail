@@ -119,11 +119,11 @@ impl Command {
         self
     }
 
-    /// Specifies a file or directory to be bind mounted in the jail.
+    /// Specifies a directory to be bind mounted in the jail.
     ///
-    /// `host_path` must be a path to a file or directory on the host system.
+    /// `host_path` must be a path to directory on the host system.
     /// `jail_path` will be create inside the jail if it doesn't already
-    /// exist. `writable` specifies whether the mounted file or directory
+    /// exist. `writable` specifies whether the mounted directory
     /// will be writable from within the jail.
     pub fn bind_mount(
         &mut self,
